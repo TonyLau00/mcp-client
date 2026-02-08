@@ -11,7 +11,7 @@
  * All intermediate steps (thoughts, tool invocations, observations) are emitted
  * via an `onStep` callback so the UI can render them in real-time.
  */
-import { callLlm, type ChatMessage, type LlmResponse, type ToolCall } from "./llm-service";
+import { callLlm, type ChatMessage, type LlmResponse, type ToolCall, type WalletContext } from "./llm-service";
 import type { McpTool, McpCallResult } from "./mcp-client";
 
 // ─── Types ──────────────────────────────────────────────────────
@@ -55,6 +55,8 @@ export interface AgentRunOptions {
   signal?: AbortSignal;
   /** Function to call a tool via MCP client */
   callTool: (name: string, args: Record<string, unknown>) => Promise<McpCallResult>;
+  /** Wallet context for system prompt injection */
+  walletContext?: WalletContext;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────
@@ -104,6 +106,7 @@ export async function runAgent(
     onStep,
     signal,
     callTool,
+    walletContext,
   } = options;
 
   const steps: AgentStep[] = [];
@@ -146,7 +149,7 @@ export async function runAgent(
 
     let llmResponse: LlmResponse;
     try {
-      llmResponse = await callLlm(conversation, tools);
+      llmResponse = await callLlm(conversation, tools, walletContext);
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
       const errorStep: AgentStep = {

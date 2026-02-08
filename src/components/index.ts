@@ -7,6 +7,8 @@ export { AgentStepPanel } from "./AgentStepPanel";
 export { ToolExplorer } from "./ToolExplorer";
 export { LlmSettings } from "./LlmSettings";
 export { TransactionConfirmDialog } from "./TransactionConfirmDialog";
+export { WalletConnect } from "./WalletConnect";
+export { TransactionCard } from "./TransactionCard";
 export { RiskWarning } from "./RiskWarning";
 export { AddressInfoPanel } from "./AddressInfoPanel";
 export { TransactionGraph } from "./TransactionGraph";

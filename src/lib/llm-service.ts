@@ -72,7 +72,16 @@ function mcpToolsToGeminiTools(tools: McpTool[]) {
 
 // ─── System Prompt ──────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `You are a TRON blockchain assistant agent with access to specialized tools for querying blockchain data.
+// ─── Wallet context passed into the system prompt ───────────────
+
+export interface WalletContext {
+  connected: boolean;
+  address: string | null;
+  network: string | null;
+}
+
+function getSystemPrompt(wallet?: WalletContext): string {
+  const base = `You are a TRON blockchain assistant agent with access to specialized tools for querying blockchain data.
 
 ## Agent Behaviour
 You follow the ReAct (Reasoning + Acting) pattern:
@@ -116,7 +125,28 @@ Always try to fulfill the user's request by combining multiple tools rather than
 - Query contract callers, methods, and interactions
 - Get comprehensive contract info (ABI, source code, verification status)
 
-Remember: You CANNOT sign or broadcast transactions. Only build unsigned transactions for user review.`;
+## Transaction Signing
+When the user asks you to transfer TRX or TRC20 tokens, use \`build_unsigned_transfer\` to build the transaction.
+The UI will automatically display an inline signing card with a "Sign & Send" button.
+- Remind the user to review the transaction details before signing.
+- The user's wallet signs and broadcasts directly from the browser — keys never leave the client.
+- You do NOT need to sign or broadcast yourself. Just build the transaction and explain what it does.`;
+
+  // Append wallet context so the agent knows the connected address
+  if (wallet?.connected && wallet.address) {
+    return base + `\n\n## Connected Wallet
+The user has a wallet connected in the UI:
+- **Address**: ${wallet.address}
+- **Network**: ${wallet.network ?? "unknown"}
+When the user asks to send/transfer tokens:
+- Use this address as the \`from_address\` automatically. Do NOT ask for it.
+- ALWAYS pass \`network: "${wallet.network}"\` to \`build_unsigned_transfer\` so the transaction is built for the correct chain.
+  If you omit the network parameter, the transaction will be built on the wrong chain and will fail.`;
+  }
+
+  return base + `\n\n## Wallet Status
+No wallet is currently connected. If the user wants to build a transaction, ask them to connect a wallet first (via the wallet button in the top bar), or ask them to provide a sender address manually.`;
+}
 
 // ─── OpenAI-Compatible Provider ─────────────────────────────────
 // Works for: openai, deepseek, ollama, openrouter, custom
@@ -126,6 +156,7 @@ async function callOpenAICompatible(
   tools: McpTool[],
   provider: ProviderConfig,
   providerKey: LlmProvider,
+  wallet?: WalletContext,
 ): Promise<LlmResponse> {
   if (provider.requiresKey && !provider.apiKey) {
     throw new Error(`${provider.label} API key not configured`);
@@ -133,7 +164,7 @@ async function callOpenAICompatible(
 
   // Format messages for OpenAI-compatible API
   const formattedMessages: Record<string, unknown>[] = [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: getSystemPrompt(wallet) },
   ];
   for (const m of messages) {
     if (m.role === "assistant" && m.toolCalls?.length) {
@@ -283,6 +314,7 @@ async function callClaude(
   messages: ChatMessage[],
   tools: McpTool[],
   provider: ProviderConfig,
+  wallet?: WalletContext,
 ): Promise<LlmResponse> {
   if (!provider.apiKey) {
     throw new Error("Claude API key not configured");
@@ -326,7 +358,7 @@ async function callClaude(
     body: JSON.stringify({
       model: provider.model,
       max_tokens: 4096,
-      system: SYSTEM_PROMPT,
+      system: getSystemPrompt(wallet),
       messages: formattedMessages,
       ...(tools.length > 0 && { tools: mcpToolsToClaudeTools(tools) }),
     }),
@@ -362,6 +394,7 @@ async function callGemini(
   messages: ChatMessage[],
   tools: McpTool[],
   provider: ProviderConfig,
+  wallet?: WalletContext,
 ): Promise<LlmResponse> {
   if (!provider.apiKey) {
     throw new Error("Gemini API key not configured");
@@ -396,7 +429,7 @@ async function callGemini(
 
   const body: Record<string, unknown> = {
     contents,
-    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+    systemInstruction: { parts: [{ text: getSystemPrompt(wallet) }] },
   };
   if (tools.length > 0) {
     body.tools = mcpToolsToGeminiTools(tools);
@@ -444,17 +477,18 @@ async function callGemini(
 export async function callLlm(
   messages: ChatMessage[],
   tools: McpTool[],
+  wallet?: WalletContext,
 ): Promise<LlmResponse> {
   const providerKey = config.llmProvider;
   const provider = getActiveProvider();
 
   switch (provider.apiFormat) {
     case "openai":
-      return callOpenAICompatible(messages, tools, provider, providerKey);
+      return callOpenAICompatible(messages, tools, provider, providerKey, wallet);
     case "claude":
-      return callClaude(messages, tools, provider);
+      return callClaude(messages, tools, provider, wallet);
     case "gemini":
-      return callGemini(messages, tools, provider);
+      return callGemini(messages, tools, provider, wallet);
     default:
       throw new Error(`Unknown API format: ${provider.apiFormat}`);
   }

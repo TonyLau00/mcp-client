@@ -2,13 +2,15 @@
  * Main chat interface component — powered by the ReAct Agent loop.
  */
 import { useCallback, useRef, useEffect } from "react";
-import { useMcpStore, useChatStore, useUiStore, useAgentStore, useLlmStore } from "@/store";
+import { useMcpStore, useChatStore, useUiStore, useAgentStore, useLlmStore, useWalletStore } from "@/store";
 import { getMcpClient } from "@/lib/mcp-client";
+import { buildTransferTx } from "@/lib/tron-wallet";
 import { runAgent } from "@/lib/agent";
 import type { ChatMessage as LlmChatMessage } from "@/lib/llm-service";
 import { ChatMessage } from "./ChatMessage";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import { AgentStepPanel } from "./AgentStepPanel";
+import { TransactionCard } from "./TransactionCard";
 import { ToolExplorer } from "./ToolExplorer";
 import { Card, CardContent, Badge } from "@/components/ui";
 import { Bot, MessageSquare, Brain } from "lucide-react";
@@ -24,7 +26,7 @@ export function ChatInterface() {
     setLoading,
     setError,
   } = useChatStore();
-  const { showTransactionConfirmation } = useUiStore();
+  const { addPendingTx, pendingTransactions, connected: walletConnected, address: walletAddress, network: walletNetwork, mode: walletMode } = useWalletStore();
   const {
     steps: agentSteps,
     addStep,
@@ -87,22 +89,50 @@ export function ChatInterface() {
         const result = await runAgent(content, history, tools, {
           maxIterations: 10,
           signal: abortController.signal,
+          walletContext: {
+            connected: walletConnected,
+            address: walletAddress,
+            network: walletNetwork,
+          },
           callTool: async (name, args) => {
             const toolResult = await client.callTool(name, args);
 
-            // Check if this is a transaction build result
+            // Check if this is a transaction build result → add to wallet pending queue
             if (name === "build_unsigned_transfer" && !toolResult.isError) {
               try {
                 const txData = JSON.parse(toolResult.content[0].text);
                 if (txData.unsigned_transaction) {
-                  showTransactionConfirmation({
+                  const tokenType = (args.token_type as string)?.toUpperCase() === "TRC20" ? "TRC20" as const : "TRX" as const;
+
+                  // Rebuild the transaction client-side using the wallet's TronWeb
+                  // so the reference block comes from the user's selected network
+                  // (the MCP server may be configured for a different network).
+                  let unsignedTx = txData.unsigned_transaction;
+                  if (walletConnected && walletMode !== "none") {
+                    try {
+                      unsignedTx = await buildTransferTx(walletMode, {
+                        tokenType,
+                        from: args.from_address as string,
+                        to: args.to_address as string,
+                        amount: String(args.amount),
+                        contractAddress: args.contract_address as string | undefined,
+                        decimals: args.token_decimals as number | undefined,
+                        feeLimitTrx: args.fee_limit_trx as number | undefined,
+                      });
+                    } catch (rebuildErr) {
+                      // If client-side rebuild fails, fall back to server's tx
+                      console.warn("[ChatInterface] Client-side tx rebuild failed, using server tx:", rebuildErr);
+                    }
+                  }
+
+                  addPendingTx({
                     id: `tx_${Date.now()}`,
-                    type: args.token_type as "TRX" | "TRC20",
+                    type: tokenType,
                     from: args.from_address as string,
                     to: args.to_address as string,
-                    amount: args.amount as string,
-                    tokenAddress: args.contract_address as string,
-                    rawTransaction: txData.unsigned_transaction,
+                    amount: String(args.amount),
+                    tokenAddress: args.contract_address as string | undefined,
+                    unsignedTransaction: unsignedTx,
                   });
                 }
               } catch {
@@ -153,7 +183,11 @@ export function ChatInterface() {
       updateMessage,
       setLoading,
       setError,
-      showTransactionConfirmation,
+      addPendingTx,
+      walletConnected,
+      walletAddress,
+      walletNetwork,
+      walletMode,
       clearSteps,
       addStep,
       updateStep,
@@ -237,6 +271,15 @@ export function ChatInterface() {
 
             {/* Agent Steps panel */}
             {agentSteps.length > 0 && <AgentStepPanel />}
+
+            {/* Pending transaction cards */}
+            {pendingTransactions.length > 0 && (
+              <div className="space-y-2">
+                {pendingTransactions.map((tx) => (
+                  <TransactionCard key={tx.id} transaction={tx} />
+                ))}
+              </div>
+            )}
 
             {/* Error display */}
             {error && (

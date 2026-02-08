@@ -8,8 +8,8 @@ import { config } from "@/config";
 import {
   ConnectionSettings,
   ChatInterface,
-  TransactionConfirmDialog,
   LlmSettings,
+  WalletConnect,
 } from "@/components";
 import { Moon, Sun, Github } from "lucide-react";
 import { Button } from "@/components/ui";
@@ -61,6 +61,7 @@ function App() {
           </div>
 
           <div className="flex items-center gap-2">
+            <WalletConnect />
             <LlmSettings />
 
             <Button
@@ -99,8 +100,6 @@ function App() {
         </div>
       </main>
 
-      {/* Transaction confirmation dialog */}
-      <TransactionConfirmDialog />
     </div>
   );
 }

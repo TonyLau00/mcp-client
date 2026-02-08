@@ -6,6 +6,7 @@ import type { McpTool, McpCallResult } from "@/lib/mcp-client";
 import type { ChatMessage, ToolCall } from "@/lib/llm-service";
 import type { AgentStep } from "@/lib/agent";
 import { config, ALL_PROVIDERS, type LlmProvider, type ProviderConfig } from "@/config";
+import type { WalletMode } from "@/lib/tron-wallet";
 
 // ─── MCP Store ──────────────────────────────────────────────────
 
@@ -259,6 +260,67 @@ export const useLlmStore = create<LlmState>((set, get) => ({
   }
   config.llmProvider = loadPersistedProvider();
 })();
+
+// ─── Wallet Store ───────────────────────────────────────────────
+
+export interface PendingTransaction {
+  id: string;
+  type: "TRX" | "TRC20";
+  from: string;
+  to: string;
+  amount: string;
+  tokenAddress?: string;
+  unsignedTransaction: Record<string, unknown>;
+  status: "pending" | "signing" | "broadcasting" | "success" | "error";
+  signedTransaction?: Record<string, unknown>;
+  txHash?: string;
+  error?: string;
+}
+
+interface WalletState {
+  mode: WalletMode;
+  address: string | null;
+  connected: boolean;
+  network: string | null;
+  pendingTransactions: PendingTransaction[];
+
+  setWallet: (state: { mode: WalletMode; address: string | null; connected: boolean; network: string | null }) => void;
+  addPendingTx: (tx: Omit<PendingTransaction, "status">) => void;
+  updatePendingTx: (id: string, updates: Partial<PendingTransaction>) => void;
+  removePendingTx: (id: string) => void;
+  clearPendingTxs: () => void;
+}
+
+export const useWalletStore = create<WalletState>((set) => ({
+  mode: "none",
+  address: null,
+  connected: false,
+  network: null,
+  pendingTransactions: [],
+
+  setWallet: (wallet) => set({
+    mode: wallet.mode,
+    address: wallet.address,
+    connected: wallet.connected,
+    network: wallet.network,
+  }),
+
+  addPendingTx: (tx) => set((state) => ({
+    pendingTransactions: [...state.pendingTransactions, { ...tx, status: "pending" }],
+  })),
+
+  updatePendingTx: (id, updates) => set((state) => ({
+    pendingTransactions: state.pendingTransactions.map((tx) =>
+      tx.id === id ? { ...tx, ...updates } : tx,
+    ),
+  })),
+
+  removePendingTx: (id) => set((state) => ({
+    pendingTransactions: state.pendingTransactions.filter((tx) => tx.id !== id),
+  })),
+
+  clearPendingTxs: () => set({ pendingTransactions: [] }),
+}));
 
 // ─── UI Store ───────────────────────────────────────────────────
 
