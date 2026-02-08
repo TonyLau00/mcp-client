@@ -64,15 +64,15 @@ const TOOL_TESTS: Record<string, ToolTestCase> = {
   },
   get_contract_callers: {
     description: "Top contract callers",
-    args: { address: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", limit: 10 },
+    args: { address: "TPfEpfiAPRfydrf4SNLTP5KYw2Pxs2eGfC", limit: 10 },
   },
   get_contract_methods: {
     description: "Contract method statistics",
-    args: { address: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t" },
+    args: { address: "TQFEyGNzHZAJmebJUvsoZvJghHm2yNhXAD" },
   },
   get_address_contracts: {
     description: "Contract interactions for address",
-    args: { address: "TDqSquXBgUCLYvYC4XZgrprLK589dkhSCf" },
+    args: { address: "TQFEyGNzHZAJmebJUvsoZvJghHm2yNhXAD" },
   },
 };
 

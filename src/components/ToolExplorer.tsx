@@ -82,17 +82,17 @@ const TOOL_TESTS: Record<string, ToolTestCase> = {
   get_contract_callers: {
     prompt:
       "Who are the top callers of contract TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t?",
-    args: { address: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", limit: 10 },
+    args: { address: "TPfEpfiAPRfydrf4SNLTP5KYw2Pxs2eGfC", limit: 10 },
   },
   get_contract_methods: {
     prompt:
       "Show function-call statistics for contract TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
-    args: { address: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t" },
+    args: { address: "TQFEyGNzHZAJmebJUvsoZvJghHm2yNhXAD" },
   },
   get_address_contracts: {
     prompt:
       "Which smart contracts has address TDqSquXBgUCLYvYC4XZgrprLK589dkhSCf interacted with?",
-    args: { address: "TDqSquXBgUCLYvYC4XZgrprLK589dkhSCf" },
+    args: { address: "TQFEyGNzHZAJmebJUvsoZvJghHm2yNhXAD" },
   },
 };
 
