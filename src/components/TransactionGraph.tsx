@@ -34,7 +34,8 @@ export function TransactionGraph({
   depth,
   onNodeClick,
 }: TransactionGraphProps) {
-  const graphRef = useRef<ForceGraphMethods>();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const graphRef = useRef<ForceGraphMethods>(null as any);
 
   const graphData = useMemo(() => {
     // Create node objects with colors
@@ -124,7 +125,7 @@ export function TransactionGraph({
         {/* Graph */}
         <div className="h-[400px] rounded-lg bg-[hsl(var(--muted))] overflow-hidden">
           <ForceGraph2D
-            ref={graphRef}
+            ref={graphRef as any}
             graphData={graphData}
             nodeLabel={nodeLabel}
             nodeColor="color"

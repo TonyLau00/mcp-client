@@ -4,6 +4,8 @@
 import { create } from "zustand";
 import type { McpTool, McpCallResult } from "@/lib/mcp-client";
 import type { ChatMessage, ToolCall } from "@/lib/llm-service";
+import type { AgentStep } from "@/lib/agent";
+import { config, ALL_PROVIDERS, type LlmProvider, type ProviderConfig } from "@/config";
 
 // ─── MCP Store ──────────────────────────────────────────────────
 
@@ -67,7 +69,7 @@ interface ChatState {
   clearMessages: () => void;
 }
 
-export const useChatStore = create<ChatState>((set, get) => ({
+export const useChatStore = create<ChatState>((set) => ({
   messages: [],
   pendingToolCalls: [],
   isLoading: false,
@@ -117,6 +119,146 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setError: (error) => set({ error }),
   clearMessages: () => set({ messages: [], pendingToolCalls: [], error: null }),
 }));
+
+// ─── Agent Store ────────────────────────────────────────────────
+
+interface AgentState {
+  /** Whether the agent is currently running */
+  running: boolean;
+  /** Current agent steps (for the latest run) */
+  steps: AgentStep[];
+  /** Total iterations in current run */
+  iterations: number;
+  /** AbortController for cancelling the current run */
+  abortController: AbortController | null;
+
+  setRunning: (running: boolean) => void;
+  addStep: (step: AgentStep) => void;
+  updateStep: (step: AgentStep) => void;
+  setIterations: (iterations: number) => void;
+  setAbortController: (controller: AbortController | null) => void;
+  clearSteps: () => void;
+  cancelRun: () => void;
+}
+
+export const useAgentStore = create<AgentState>((set, get) => ({
+  running: false,
+  steps: [],
+  iterations: 0,
+  abortController: null,
+
+  setRunning: (running) => set({ running }),
+
+  addStep: (step) => {
+    set((state) => ({ steps: [...state.steps, step] }));
+  },
+
+  updateStep: (step) => {
+    set((state) => ({
+      steps: state.steps.map((s) => (s.id === step.id ? step : s)),
+    }));
+  },
+
+  setIterations: (iterations) => set({ iterations }),
+
+  setAbortController: (abortController) => set({ abortController }),
+
+  clearSteps: () => set({ steps: [], iterations: 0 }),
+
+  cancelRun: () => {
+    const { abortController } = get();
+    if (abortController) {
+      abortController.abort();
+      set({ running: false, abortController: null });
+    }
+  },
+}));
+
+// ─── LLM Store ──────────────────────────────────────────────────
+
+interface LlmState {
+  /** Currently active provider key */
+  activeProvider: LlmProvider;
+  /** Runtime overrides for provider configs (persisted in localStorage) */
+  providerOverrides: Partial<Record<LlmProvider, Partial<ProviderConfig>>>;
+
+  /** Switch the active provider */
+  setActiveProvider: (provider: LlmProvider) => void;
+  /** Update a provider's config at runtime (apiKey, baseUrl, model) */
+  updateProvider: (provider: LlmProvider, updates: Partial<ProviderConfig>) => void;
+  /** Get the effective config for a provider (env defaults + runtime overrides) */
+  getProviderConfig: (provider: LlmProvider) => ProviderConfig;
+  /** Get all available providers */
+  getAllProviders: () => LlmProvider[];
+}
+
+/** Load persisted overrides from localStorage */
+function loadPersistedOverrides(): Partial<Record<LlmProvider, Partial<ProviderConfig>>> {
+  try {
+    const stored = localStorage.getItem("llm-provider-overrides");
+    return stored ? JSON.parse(stored) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Load persisted active provider from localStorage */
+function loadPersistedProvider(): LlmProvider {
+  try {
+    const stored = localStorage.getItem("llm-active-provider");
+    if (stored && ALL_PROVIDERS.includes(stored as LlmProvider)) {
+      return stored as LlmProvider;
+    }
+  } catch { /* ignore */ }
+  return config.llmProvider;
+}
+
+export const useLlmStore = create<LlmState>((set, get) => ({
+  activeProvider: loadPersistedProvider(),
+  providerOverrides: loadPersistedOverrides(),
+
+  setActiveProvider: (provider) => {
+    // Also update the global config so llm-service picks it up
+    config.llmProvider = provider;
+    localStorage.setItem("llm-active-provider", provider);
+    set({ activeProvider: provider });
+  },
+
+  updateProvider: (provider, updates) => {
+    set((state) => {
+      const newOverrides = {
+        ...state.providerOverrides,
+        [provider]: { ...state.providerOverrides[provider], ...updates },
+      };
+      // Persist to localStorage
+      localStorage.setItem("llm-provider-overrides", JSON.stringify(newOverrides));
+      // Apply overrides to global config
+      const base = config.providers[provider];
+      const merged = { ...base, ...newOverrides[provider] };
+      config.providers[provider] = merged as ProviderConfig;
+      return { providerOverrides: newOverrides };
+    });
+  },
+
+  getProviderConfig: (provider) => {
+    const base = config.providers[provider];
+    const overrides = get().providerOverrides[provider] || {};
+    return { ...base, ...overrides } as ProviderConfig;
+  },
+
+  getAllProviders: () => ALL_PROVIDERS,
+}));
+
+// Apply persisted overrides to global config on load
+(function applyPersistedOverrides() {
+  const overrides = loadPersistedOverrides();
+  for (const key of ALL_PROVIDERS) {
+    if (overrides[key]) {
+      config.providers[key] = { ...config.providers[key], ...overrides[key] } as ProviderConfig;
+    }
+  }
+  config.llmProvider = loadPersistedProvider();
+})();
 
 // ─── UI Store ───────────────────────────────────────────────────
 

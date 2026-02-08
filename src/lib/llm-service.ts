@@ -1,18 +1,25 @@
 /**
  * LLM Service - Handles AI interactions with tool calling.
  *
- * Supports: OpenAI, Claude, DeepSeek
+ * Supports: OpenAI, Claude, DeepSeek, Gemini, Ollama, OpenRouter, Custom (OpenAI-compatible)
+ *
+ * Provider routing:
+ *   - openai, deepseek, ollama, openrouter, custom → OpenAI chat/completions format
+ *   - claude → Anthropic messages format
+ *   - gemini → Google Generative Language API format
  */
-import { config } from "@/config";
+import { config, getActiveProvider, type ProviderConfig, type LlmProvider } from "@/config";
 import type { McpTool, McpCallResult } from "./mcp-client";
 
 export interface ChatMessage {
   role: "user" | "assistant" | "system" | "tool";
   content: string;
-  toolCall?: {
-    name: string;
-    arguments: Record<string, unknown>;
-  };
+  /** Tool calls requested by the assistant (on assistant messages) */
+  toolCalls?: ToolCall[];
+  /** The tool_call_id this message is responding to (on tool messages) */
+  toolCallId?: string;
+  /** Tool name for this tool result (on tool messages) */
+  toolName?: string;
   toolResult?: McpCallResult;
 }
 
@@ -27,9 +34,9 @@ export interface LlmResponse {
   toolCalls?: ToolCall[];
 }
 
-/**
- * Convert MCP tools to OpenAI function format.
- */
+// ─── Tool Schema Converters ─────────────────────────────────────
+
+/** OpenAI / DeepSeek / Ollama / OpenRouter / Custom compatible format */
 function mcpToolsToOpenAiFunctions(tools: McpTool[]) {
   return tools.map((tool) => ({
     type: "function" as const,
@@ -41,9 +48,7 @@ function mcpToolsToOpenAiFunctions(tools: McpTool[]) {
   }));
 }
 
-/**
- * Convert MCP tools to Claude tool format.
- */
+/** Anthropic Claude format */
 function mcpToolsToClaudeTools(tools: McpTool[]) {
   return tools.map((tool) => ({
     name: tool.name,
@@ -52,129 +57,268 @@ function mcpToolsToClaudeTools(tools: McpTool[]) {
   }));
 }
 
-/**
- * System prompt for the TRON assistant.
- */
-const SYSTEM_PROMPT = `You are a TRON blockchain assistant with access to specialized tools for querying blockchain data.
+/** Google Gemini format */
+function mcpToolsToGeminiTools(tools: McpTool[]) {
+  return [
+    {
+      function_declarations: tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.inputSchema,
+      })),
+    },
+  ];
+}
 
-Available capabilities:
-- Query account information (TRX balance, energy, bandwidth, TRC20 tokens)
-- Check transaction status and details
-- Get network parameters (energy price, bandwidth price)
+// ─── System Prompt ──────────────────────────────────────────────
+
+const SYSTEM_PROMPT = `You are a TRON blockchain assistant agent with access to specialized tools for querying blockchain data.
+
+## Agent Behaviour
+You follow the ReAct (Reasoning + Acting) pattern:
+1. **Think** about the user's question and decide what information you need.
+2. **Act** by calling one or more tools to gather data.
+3. **Observe** the tool results and decide if you have enough information.
+4. **Repeat** steps 1-3 if more data is needed.
+5. **Answer** when you have sufficient information.
+
+## Tool Usage Guidelines
+- You can call MULTIPLE tools in a single turn if the data is independent.
+- If a tool returns an error, try an alternative approach or explain the limitation.
+- When building transactions, ALWAYS remind users to review and sign locally.
+- For risk analysis, clearly explain risk factors and severity levels.
+- Present numerical data clearly (format TRX amounts, use appropriate units).
+- Use get_transaction_raw_data for detailed MongoDB data (internal txs, contract input data).
+- Use get_transaction_status for quick TronGrid API lookups.
+
+## Available Capabilities
+- Query account info (TRX balance, energy, bandwidth, TRC20 tokens)
+- Check transaction status and full raw data (including internal transactions)
+- Get network parameters (energy/bandwidth prices)
 - Analyze address security and risk scores
 - Build unsigned transfer transactions (user must sign locally)
-- Analyze address transaction graphs
-- Perform fund flow analysis
+- Analyze address transaction graphs and fund flows
+- Query contract callers, methods, and interactions
 
-Guidelines:
-1. Always use the appropriate tools to get accurate blockchain data - never make up data.
-2. When building transactions, ALWAYS remind users that they need to review and sign transactions locally.
-3. For risk analysis, clearly explain the risk factors and severity levels.
-4. Present numerical data clearly (format TRX amounts, use appropriate units).
-5. If a tool returns an error, explain it to the user and suggest alternatives.
+Remember: You CANNOT sign or broadcast transactions. Only build unsigned transactions for user review.`;
 
-Remember: You cannot sign or broadcast transactions. You can only build unsigned transactions for users to review.`;
+// ─── OpenAI-Compatible Provider ─────────────────────────────────
+// Works for: openai, deepseek, ollama, openrouter, custom
 
-/**
- * Call OpenAI API with tool support.
- */
-async function callOpenAI(
+async function callOpenAICompatible(
   messages: ChatMessage[],
-  tools: McpTool[]
+  tools: McpTool[],
+  provider: ProviderConfig,
+  providerKey: LlmProvider,
 ): Promise<LlmResponse> {
-  const apiKey = config.openaiApiKey;
-  if (!apiKey) {
-    throw new Error("OpenAI API key not configured");
+  if (provider.requiresKey && !provider.apiKey) {
+    throw new Error(`${provider.label} API key not configured`);
   }
 
-  const formattedMessages = [
+  // Format messages for OpenAI-compatible API
+  const formattedMessages: Record<string, unknown>[] = [
     { role: "system", content: SYSTEM_PROMPT },
-    ...messages.map((m) => ({
-      role: m.role === "tool" ? "tool" : m.role,
-      content: m.content,
-      ...(m.toolCall && { tool_call_id: m.toolCall.name }),
-    })),
   ];
+  for (const m of messages) {
+    if (m.role === "assistant" && m.toolCalls?.length) {
+      // Assistant message that requested tool calls
+      formattedMessages.push({
+        role: "assistant",
+        content: m.content || null,
+        tool_calls: m.toolCalls.map((tc) => ({
+          id: tc.id,
+          type: "function",
+          function: {
+            name: tc.name,
+            arguments: JSON.stringify(tc.arguments),
+          },
+        })),
+      });
+    } else if (m.role === "tool") {
+      // Tool result message — must have tool_call_id
+      formattedMessages.push({
+        role: "tool",
+        content: m.content,
+        tool_call_id: m.toolCallId || "",
+      });
+    } else {
+      formattedMessages.push({
+        role: m.role,
+        content: m.content,
+      });
+    }
+  }
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  // Build URL: some providers use /v1/chat/completions, Ollama uses /api/chat
+  let url: string;
+  if (providerKey === "ollama") {
+    url = `${provider.baseUrl}/api/chat`;
+  } else {
+    // Ensure baseUrl ends with /v1 then append /chat/completions
+    const base = provider.baseUrl.replace(/\/+$/, "");
+    url = base.endsWith("/v1")
+      ? `${base}/chat/completions`
+      : `${base}/v1/chat/completions`;
+  }
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (provider.apiKey) {
+    headers["Authorization"] = `Bearer ${provider.apiKey}`;
+  }
+  // OpenRouter requires extra headers
+  if (providerKey === "openrouter") {
+    headers["HTTP-Referer"] = window.location.origin;
+    headers["X-Title"] = "TRON MCP Agent";
+  }
+
+  // Build body — Ollama uses slightly different payload
+  const body: Record<string, unknown> = {
+    model: provider.model,
+    messages: formattedMessages,
+  };
+  if (tools.length > 0) {
+    if (providerKey === "ollama") {
+      body.tools = mcpToolsToOpenAiFunctions(tools);
+    } else {
+      body.tools = mcpToolsToOpenAiFunctions(tools);
+      body.tool_choice = "auto";
+    }
+  }
+
+  const response = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: "gpt-4-turbo-preview",
-      messages: formattedMessages,
-      tools: mcpToolsToOpenAiFunctions(tools),
-      tool_choice: "auto",
-    }),
+    headers,
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
     const error = await response.text();
-    throw new Error(`OpenAI API error: ${error}`);
+    throw new Error(`${provider.label} API error (${response.status}): ${error}`);
   }
 
   const data = await response.json();
-  const choice = data.choices[0];
-  const message = choice.message;
+
+  // Ollama returns slightly different structure
+  if (providerKey === "ollama") {
+    return parseOllamaResponse(data);
+  }
+
+  return parseOpenAIResponse(data);
+}
+
+function parseOpenAIResponse(data: Record<string, unknown>): LlmResponse {
+  const choices = data.choices as Array<{
+    message: {
+      content: string | null;
+      tool_calls?: Array<{
+        id: string;
+        function: { name: string; arguments: string };
+      }>;
+    };
+  }>;
+  const message = choices[0].message;
 
   const result: LlmResponse = {
     content: message.content || "",
   };
 
-  if (message.tool_calls?.length > 0) {
-    result.toolCalls = message.tool_calls.map(
-      (tc: { id: string; function: { name: string; arguments: string } }) => ({
-        id: tc.id,
-        name: tc.function.name,
-        arguments: JSON.parse(tc.function.arguments),
-      })
-    );
+  if (message.tool_calls?.length) {
+    result.toolCalls = message.tool_calls.map((tc) => ({
+      id: tc.id,
+      name: tc.function.name,
+      arguments: JSON.parse(tc.function.arguments),
+    }));
   }
 
   return result;
 }
 
-/**
- * Call Claude API with tool support.
- */
+function parseOllamaResponse(data: Record<string, unknown>): LlmResponse {
+  const message = data.message as {
+    content: string;
+    tool_calls?: Array<{
+      function: { name: string; arguments: Record<string, unknown> };
+    }>;
+  };
+
+  const result: LlmResponse = {
+    content: message.content || "",
+  };
+
+  if (message.tool_calls?.length) {
+    result.toolCalls = message.tool_calls.map((tc, i) => ({
+      id: `ollama_tc_${Date.now()}_${i}`,
+      name: tc.function.name,
+      arguments:
+        typeof tc.function.arguments === "string"
+          ? JSON.parse(tc.function.arguments)
+          : tc.function.arguments,
+    }));
+  }
+
+  return result;
+}
+
+// ─── Anthropic Claude ───────────────────────────────────────────
+
 async function callClaude(
   messages: ChatMessage[],
-  tools: McpTool[]
+  tools: McpTool[],
+  provider: ProviderConfig,
 ): Promise<LlmResponse> {
-  const apiKey = config.claudeApiKey;
-  if (!apiKey) {
+  if (!provider.apiKey) {
     throw new Error("Claude API key not configured");
   }
 
-  const formattedMessages = messages.map((m) => ({
-    role: m.role === "system" ? "user" : m.role === "tool" ? "user" : m.role,
-    content:
-      m.role === "tool"
-        ? `Tool result for ${m.toolCall?.name}:\n${m.content}`
-        : m.content,
-  }));
+  const formattedMessages: Array<{ role: string; content: unknown }> = [];
+  for (const m of messages) {
+    if (m.role === "system") continue; // system is passed separately
+    if (m.role === "assistant" && m.toolCalls?.length) {
+      // Assistant with tool_use blocks
+      const content: unknown[] = [];
+      if (m.content) content.push({ type: "text", text: m.content });
+      for (const tc of m.toolCalls) {
+        content.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.arguments });
+      }
+      formattedMessages.push({ role: "assistant", content });
+    } else if (m.role === "tool") {
+      // Tool result block
+      formattedMessages.push({
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: m.toolCallId || "",
+          content: m.content,
+        }],
+      });
+    } else {
+      formattedMessages.push({ role: m.role, content: m.content });
+    }
+  }
 
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
+  const baseUrl = provider.baseUrl.replace(/\/+$/, "");
+  const response = await fetch(`${baseUrl}/v1/messages`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": apiKey,
+      "x-api-key": provider.apiKey,
       "anthropic-version": "2024-01-01",
+      "anthropic-dangerous-direct-browser-access": "true",
     },
     body: JSON.stringify({
-      model: "claude-3-opus-20240229",
+      model: provider.model,
       max_tokens: 4096,
       system: SYSTEM_PROMPT,
       messages: formattedMessages,
-      tools: mcpToolsToClaudeTools(tools),
+      ...(tools.length > 0 && { tools: mcpToolsToClaudeTools(tools) }),
     }),
   });
 
   if (!response.ok) {
     const error = await response.text();
-    throw new Error(`Claude API error: ${error}`);
+    throw new Error(`Claude API error (${response.status}): ${error}`);
   }
 
   const data = await response.json();
@@ -196,81 +340,107 @@ async function callClaude(
   return result;
 }
 
-/**
- * Call DeepSeek API with tool support.
- */
-async function callDeepSeek(
+// ─── Google Gemini ──────────────────────────────────────────────
+
+async function callGemini(
   messages: ChatMessage[],
-  tools: McpTool[]
+  tools: McpTool[],
+  provider: ProviderConfig,
 ): Promise<LlmResponse> {
-  const apiKey = config.deepseekApiKey;
-  if (!apiKey) {
-    throw new Error("DeepSeek API key not configured");
+  if (!provider.apiKey) {
+    throw new Error("Gemini API key not configured");
   }
 
-  const formattedMessages = [
-    { role: "system", content: SYSTEM_PROMPT },
-    ...messages.map((m) => ({
-      role: m.role === "tool" ? "tool" : m.role,
-      content: m.content,
-    })),
-  ];
+  // Convert chat messages to Gemini format
+  const contents: Array<{ role: string; parts: unknown[] }> = [];
+  for (const m of messages) {
+    if (m.role === "system") continue;
+    if (m.role === "assistant" && m.toolCalls?.length) {
+      const parts: unknown[] = [];
+      if (m.content) parts.push({ text: m.content });
+      for (const tc of m.toolCalls) {
+        parts.push({ functionCall: { name: tc.name, args: tc.arguments } });
+      }
+      contents.push({ role: "model", parts });
+    } else if (m.role === "tool") {
+      contents.push({
+        role: "function",
+        parts: [{ functionResponse: { name: m.toolName || "", response: { content: m.content } } }],
+      });
+    } else {
+      contents.push({
+        role: m.role === "assistant" ? "model" : "user",
+        parts: [{ text: m.content }],
+      });
+    }
+  }
 
-  const response = await fetch("https://api.deepseek.com/chat/completions", {
+  const baseUrl = provider.baseUrl.replace(/\/+$/, "");
+  const url = `${baseUrl}/models/${provider.model}:generateContent?key=${provider.apiKey}`;
+
+  const body: Record<string, unknown> = {
+    contents,
+    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+  };
+  if (tools.length > 0) {
+    body.tools = mcpToolsToGeminiTools(tools);
+  }
+
+  const response = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: "deepseek-chat",
-      messages: formattedMessages,
-      tools: mcpToolsToOpenAiFunctions(tools),
-      tool_choice: "auto",
-    }),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
     const error = await response.text();
-    throw new Error(`DeepSeek API error: ${error}`);
+    throw new Error(`Gemini API error (${response.status}): ${error}`);
   }
 
   const data = await response.json();
-  const choice = data.choices[0];
-  const message = choice.message;
+  const result: LlmResponse = { content: "" };
 
-  const result: LlmResponse = {
-    content: message.content || "",
-  };
+  const candidate = data.candidates?.[0];
+  if (!candidate) return result;
 
-  if (message.tool_calls?.length > 0) {
-    result.toolCalls = message.tool_calls.map(
-      (tc: { id: string; function: { name: string; arguments: string } }) => ({
-        id: tc.id,
-        name: tc.function.name,
-        arguments: JSON.parse(tc.function.arguments),
-      })
-    );
+  for (const part of candidate.content?.parts || []) {
+    if (part.text) {
+      result.content += part.text;
+    } else if (part.functionCall) {
+      if (!result.toolCalls) result.toolCalls = [];
+      result.toolCalls.push({
+        id: `gemini_tc_${Date.now()}_${result.toolCalls.length}`,
+        name: part.functionCall.name,
+        arguments: part.functionCall.args || {},
+      });
+    }
   }
 
   return result;
 }
 
+// ─── Public API ─────────────────────────────────────────────────
+
 /**
  * Call the configured LLM provider.
+ * The active provider is read from config.llmProvider (can be changed at runtime).
  */
 export async function callLlm(
   messages: ChatMessage[],
-  tools: McpTool[]
+  tools: McpTool[],
 ): Promise<LlmResponse> {
-  switch (config.llmProvider) {
+  const providerKey = config.llmProvider;
+  const provider = getActiveProvider();
+
+  switch (provider.apiFormat) {
     case "openai":
-      return callOpenAI(messages, tools);
+      return callOpenAICompatible(messages, tools, provider, providerKey);
     case "claude":
-      return callClaude(messages, tools);
-    case "deepseek":
-      return callDeepSeek(messages, tools);
+      return callClaude(messages, tools, provider);
+    case "gemini":
+      return callGemini(messages, tools, provider);
     default:
-      throw new Error(`Unknown LLM provider: ${config.llmProvider}`);
+      throw new Error(`Unknown API format: ${provider.apiFormat}`);
   }
 }
+

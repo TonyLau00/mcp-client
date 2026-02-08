@@ -1,41 +1,49 @@
 /**
- * Main chat interface component.
+ * Main chat interface component — powered by the ReAct Agent loop.
  */
 import { useCallback, useRef, useEffect } from "react";
-import { useMcpStore, useChatStore, useUiStore } from "@/store";
+import { useMcpStore, useChatStore, useUiStore, useAgentStore, useLlmStore } from "@/store";
 import { getMcpClient } from "@/lib/mcp-client";
-import { callLlm, type ChatMessage as LlmChatMessage } from "@/lib/llm-service";
+import { runAgent } from "@/lib/agent";
+import type { ChatMessage as LlmChatMessage } from "@/lib/llm-service";
 import { ChatMessage } from "./ChatMessage";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
-import { ToolCallPanel } from "./ToolCallPanel";
+import { AgentStepPanel } from "./AgentStepPanel";
 import { ToolExplorer } from "./ToolExplorer";
 import { Card, CardContent, Badge } from "@/components/ui";
-import { Bot, MessageSquare } from "lucide-react";
+import { Bot, MessageSquare, Brain } from "lucide-react";
 
 export function ChatInterface() {
   const { connected, serverUrl, tools } = useMcpStore();
   const {
     messages,
-    pendingToolCalls,
     isLoading,
     error,
     addMessage,
     updateMessage,
-    addToolCall,
-    updateToolCall,
-    clearToolCalls,
     setLoading,
     setError,
   } = useChatStore();
   const { showTransactionConfirmation } = useUiStore();
+  const {
+    steps: agentSteps,
+    addStep,
+    updateStep,
+    clearSteps,
+    setRunning,
+    setIterations,
+    setAbortController,
+  } = useAgentStore();
+  const { activeProvider, getProviderConfig } = useLlmStore();
+  const activeProviderConfig = getProviderConfig(activeProvider);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<ChatInputHandle>(null);
 
-  // Scroll to bottom when messages change
+  // Scroll to bottom when messages or agent steps change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, pendingToolCalls]);
+  }, [messages, agentSteps]);
 
   const handleSendMessage = useCallback(
     async (content: string) => {
@@ -48,109 +56,80 @@ export function ChatInterface() {
       addMessage({ role: "user", content });
       setLoading(true);
       setError(null);
-      clearToolCalls();
+      clearSteps();
+
+      // Create abort controller for cancellation
+      const abortController = new AbortController();
+      setAbortController(abortController);
+      setRunning(true);
 
       try {
-        // Build message history for LLM
-        const llmMessages: LlmChatMessage[] = messages.map((m) => ({
+        // Build message history for the agent
+        const history: LlmChatMessage[] = messages.map((m) => ({
           role: m.role,
           content: m.content,
-          toolCall: m.toolCall,
+          toolCalls: m.toolCalls,
+          toolCallId: m.toolCallId,
+          toolName: m.toolName,
           toolResult: m.toolResult,
         }));
-        llmMessages.push({ role: "user", content });
 
-        // Call LLM
-        const response = await callLlm(llmMessages, tools);
+        const client = getMcpClient(serverUrl);
 
-        // Handle tool calls if any
-        if (response.toolCalls && response.toolCalls.length > 0) {
-          // Add pending indicator for assistant
-          const assistantMsgId = addMessage({
-            role: "assistant",
-            content: response.content || "Let me check that for you...",
-            pending: true,
-          });
+        // Add a pending assistant message
+        const assistantMsgId = addMessage({
+          role: "assistant",
+          content: "",
+          pending: true,
+        });
 
-          // Process tool calls sequentially
-          const toolResults: string[] = [];
-          
-          for (const toolCall of response.toolCalls) {
-            addToolCall(toolCall);
-            updateToolCall(toolCall.id, { status: "running" });
+        // Run the ReAct agent loop
+        const result = await runAgent(content, history, tools, {
+          maxIterations: 10,
+          signal: abortController.signal,
+          callTool: async (name, args) => {
+            const toolResult = await client.callTool(name, args);
 
-            try {
-              const client = getMcpClient(serverUrl);
-              const result = await client.callTool(
-                toolCall.name,
-                toolCall.arguments
-              );
-
-              updateToolCall(toolCall.id, { status: "complete", result });
-
-              // Check if this is a transaction build result
-              if (
-                toolCall.name === "build_unsigned_transfer" &&
-                !result.isError
-              ) {
-                try {
-                  const txData = JSON.parse(result.content[0].text);
-                  if (txData.transaction) {
-                    showTransactionConfirmation({
-                      id: toolCall.id,
-                      type: toolCall.arguments.token_type as "TRX" | "TRC20",
-                      from: toolCall.arguments.from_address as string,
-                      to: toolCall.arguments.to_address as string,
-                      amount: toolCall.arguments.amount as string,
-                      tokenAddress: toolCall.arguments.contract_address as string,
-                      rawTransaction: txData.transaction,
-                    });
-                  }
-                } catch {
-                  // Not JSON or no transaction field
+            // Check if this is a transaction build result
+            if (name === "build_unsigned_transfer" && !toolResult.isError) {
+              try {
+                const txData = JSON.parse(toolResult.content[0].text);
+                if (txData.unsigned_transaction) {
+                  showTransactionConfirmation({
+                    id: `tx_${Date.now()}`,
+                    type: args.token_type as "TRX" | "TRC20",
+                    from: args.from_address as string,
+                    to: args.to_address as string,
+                    amount: args.amount as string,
+                    tokenAddress: args.contract_address as string,
+                    rawTransaction: txData.unsigned_transaction,
+                  });
                 }
+              } catch {
+                // Not JSON or no transaction field
               }
-
-              toolResults.push(
-                `Tool "${toolCall.name}" result:\n${result.content
-                  .map((c) => c.text)
-                  .join("\n")}`
-              );
-            } catch (err) {
-              const errMsg =
-                err instanceof Error ? err.message : "Tool call failed";
-              updateToolCall(toolCall.id, { status: "error", error: errMsg });
-              toolResults.push(`Tool "${toolCall.name}" error: ${errMsg}`);
             }
-          }
 
-          // Call LLM again with tool results
-          const finalMessages: LlmChatMessage[] = [
-            ...llmMessages,
-            {
-              role: "assistant",
-              content: response.content || "",
-            },
-            {
-              role: "tool",
-              content: toolResults.join("\n\n"),
-            },
-          ];
+            return toolResult;
+          },
+          onStep: (step) => {
+            // Check if step already exists (update) or is new (add)
+            const existing = useAgentStore.getState().steps.find((s) => s.id === step.id);
+            if (existing) {
+              updateStep(step);
+            } else {
+              addStep(step);
+            }
+          },
+        });
 
-          const finalResponse = await callLlm(finalMessages, tools);
+        // Update assistant message with final answer
+        updateMessage(assistantMsgId, {
+          content: result.answer,
+          pending: false,
+        });
 
-          // Update assistant message with final response
-          updateMessage(assistantMsgId, {
-            content: finalResponse.content,
-            pending: false,
-          });
-        } else {
-          // No tool calls, just add the response
-          addMessage({
-            role: "assistant",
-            content: response.content,
-          });
-        }
+        setIterations(result.iterations);
       } catch (err) {
         const errMsg =
           err instanceof Error ? err.message : "Failed to process message";
@@ -161,6 +140,8 @@ export function ChatInterface() {
         });
       } finally {
         setLoading(false);
+        setRunning(false);
+        setAbortController(null);
       }
     },
     [
@@ -170,12 +151,15 @@ export function ChatInterface() {
       messages,
       addMessage,
       updateMessage,
-      addToolCall,
-      updateToolCall,
-      clearToolCalls,
       setLoading,
       setError,
       showTransactionConfirmation,
+      clearSteps,
+      addStep,
+      updateStep,
+      setRunning,
+      setIterations,
+      setAbortController,
     ]
   );
 
@@ -187,10 +171,11 @@ export function ChatInterface() {
         <div className="border-b border-[hsl(var(--border))] p-4">
           <div className="flex items-center gap-2">
             <Bot className="h-5 w-5 text-[hsl(var(--primary))]" />
-            <h2 className="font-semibold">TRON Assistant</h2>
+            <h2 className="font-semibold">TRON Agent</h2>
             {connected ? (
               <Badge variant="success" className="ml-auto">
-                {tools.length} tools available
+                <Brain className="h-3 w-3 mr-1" />
+                {tools.length} tools · {activeProviderConfig.label} · {activeProviderConfig.model}
               </Badge>
             ) : (
               <Badge variant="destructive" className="ml-auto">
@@ -250,8 +235,8 @@ export function ChatInterface() {
               <ChatMessage key={msg.id} message={msg} />
             ))}
 
-            {/* Tool calls panel */}
-            {pendingToolCalls.length > 0 && <ToolCallPanel />}
+            {/* Agent Steps panel */}
+            {agentSteps.length > 0 && <AgentStepPanel />}
 
             {/* Error display */}
             {error && (

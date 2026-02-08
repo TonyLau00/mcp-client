@@ -9,6 +9,7 @@ import {
   ConnectionSettings,
   ChatInterface,
   TransactionConfirmDialog,
+  LlmSettings,
 } from "@/components";
 import { Moon, Sun, Github } from "lucide-react";
 import { Button } from "@/components/ui";
@@ -52,14 +53,16 @@ function App() {
               <span className="text-lg font-bold text-white">T</span>
             </div>
             <div>
-              <h1 className="font-semibold">TRON MCP Client</h1>
+              <h1 className="font-semibold">TRON MCP Agent</h1>
               <p className="text-xs text-[hsl(var(--muted-foreground))]">
-                AI-powered blockchain assistant
+                ReAct-powered blockchain agent
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
+            <LlmSettings />
+
             <Button
               variant="ghost"
               size="icon"
