@@ -1,7 +1,7 @@
 /**
  * Agent Step Panel — renders the ReAct agent's reasoning / tool-call / result steps.
  */
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -14,11 +14,16 @@ import {
   ChevronRight,
   Clock,
   Zap,
+  Maximize2,
+  Copy,
+  Check,
+  GitBranch,
 } from "lucide-react";
-import { Card, CardContent, Badge } from "@/components/ui";
+import { Card, CardContent, Badge, Dialog, DialogHeader, DialogTitle } from "@/components/ui";
 import { useAgentStore } from "@/store";
 import { cn } from "@/lib/utils";
 import type { AgentStep } from "@/lib/agent";
+import { Neo4jGraphModal, tryExtractGraphData, type Neo4jGraphData } from "./Neo4jGraphModal";
 
 function StepIcon({ step }: { step: AgentStep }) {
   switch (step.type) {
@@ -75,8 +80,95 @@ function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+// ─── Full-result detail modal ────────────────────────────────────
+
+function ToolDetailModal({
+  open,
+  onClose,
+  title,
+  content,
+  isError,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  content: string;
+  isError?: boolean;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(formatted);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  // Try to format as pretty JSON for readability
+  let formatted = content;
+  try {
+    const parsed = JSON.parse(content);
+    formatted = JSON.stringify(parsed, null, 2);
+  } catch {
+    // not JSON — keep original
+  }
+
+  return (
+    <Dialog open={open} onClose={onClose} className="max-w-5xl w-full">
+      <DialogHeader>
+        <div className="flex items-center gap-2 pr-8">
+          <Wrench className={cn("h-4 w-4", isError ? "text-red-400" : "text-blue-400")} />
+          <DialogTitle>{title}</DialogTitle>
+        </div>
+      </DialogHeader>
+
+      <div className="relative">
+        <button
+          onClick={handleCopy}
+          className={cn(
+            "absolute top-2 right-2 z-10 p-1.5 rounded transition-colors",
+            "bg-[hsl(var(--muted))] hover:bg-[hsl(var(--accent))]",
+          )}
+          title="Copy to clipboard"
+        >
+          {copied ? (
+            <Check className="h-3.5 w-3.5 text-green-400" />
+          ) : (
+            <Copy className="h-3.5 w-3.5 text-[hsl(var(--muted-foreground))]" />
+          )}
+        </button>
+
+        <pre
+          className={cn(
+            "rounded p-4 pr-12 text-xs font-mono whitespace-pre-wrap break-words",
+            "max-h-[65vh] overflow-auto",
+            isError
+              ? "bg-red-500/10 text-red-300"
+              : "bg-black/30 text-[hsl(var(--foreground))]",
+          )}
+        >
+          {formatted}
+        </pre>
+      </div>
+    </Dialog>
+  );
+}
+
 function StepItem({ step, defaultExpanded }: { step: AgentStep; defaultExpanded?: boolean }) {
   const [expanded, setExpanded] = useState(defaultExpanded ?? false);
+  const [detailView, setDetailView] = useState<{
+    title: string;
+    content: string;
+    isError?: boolean;
+  } | null>(null);
+  const [graphView, setGraphView] = useState<{ data: Neo4jGraphData; title: string } | null>(null);
+
+  // Detect graph data in tool result
+  const graphDataInResult = useMemo(() => {
+    if (step.type !== "tool_result" || step.toolResult?.isError) return null;
+    const text = step.toolResult?.content.map((c) => c.text).join("\n") ?? "";
+    return tryExtractGraphData(text);
+  }, [step]);
+
   const duration =
     step.completedAt && step.startedAt
       ? step.completedAt - step.startedAt
@@ -158,8 +250,23 @@ function StepItem({ step, defaultExpanded }: { step: AgentStep; defaultExpanded?
           {/* Tool call arguments */}
           {step.toolCall && (
             <div className="rounded bg-blue-500/10 p-2">
-              <p className="text-blue-400 font-medium mb-1">Arguments:</p>
-              <pre className="overflow-x-auto whitespace-pre-wrap font-mono">
+              <div className="flex items-center justify-between mb-1">
+                <p className="text-blue-400 font-medium">Arguments:</p>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDetailView({
+                      title: `${step.toolCall!.name} — Arguments`,
+                      content: JSON.stringify(step.toolCall!.arguments, null, 2),
+                    });
+                  }}
+                  className="p-1 rounded hover:bg-blue-500/20 transition-colors"
+                  title="View full content"
+                >
+                  <Maximize2 className="h-3 w-3 text-blue-400" />
+                </button>
+              </div>
+              <pre className="overflow-x-auto whitespace-pre-wrap font-mono max-h-32 overflow-y-auto">
                 {JSON.stringify(step.toolCall.arguments, null, 2)}
               </pre>
             </div>
@@ -169,24 +276,90 @@ function StepItem({ step, defaultExpanded }: { step: AgentStep; defaultExpanded?
           {step.toolResult && (
             <div
               className={cn(
-                "rounded p-2 max-h-48 overflow-y-auto",
+                "rounded p-2",
                 step.toolResult.isError ? "bg-red-500/10" : "bg-green-500/10",
               )}
             >
-              <p
-                className={cn(
-                  "font-medium mb-1",
-                  step.toolResult.isError ? "text-red-400" : "text-green-400",
-                )}
-              >
-                {step.toolResult.isError ? "Error:" : "Output:"}
-              </p>
-              <pre className="overflow-x-auto whitespace-pre-wrap font-mono">
+              <div className="flex items-center justify-between mb-1">
+                <p
+                  className={cn(
+                    "font-medium",
+                    step.toolResult.isError ? "text-red-400" : "text-green-400",
+                  )}
+                >
+                  {step.toolResult.isError ? "Error:" : "Output:"}
+                </p>
+                <div className="flex items-center gap-1">
+                  {/* Graph visualization button — shown when result has graph data */}
+                  {graphDataInResult && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setGraphView({
+                          data: graphDataInResult,
+                          title: `${step.toolName || "Tool"} — Graph`,
+                        });
+                      }}
+                      className="p-1 rounded hover:bg-blue-500/20 transition-colors flex items-center gap-1"
+                      title="Visualize graph"
+                    >
+                      <GitBranch className="h-3 w-3 text-blue-400" />
+                      <span className="text-[10px] text-blue-400">Graph</span>
+                    </button>
+                  )}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDetailView({
+                        title: `${step.toolName || "Tool"} — Result`,
+                        content: step.toolResult!.content.map((c) => c.text).join("\n"),
+                        isError: step.toolResult!.isError,
+                      });
+                    }}
+                    className={cn(
+                      "p-1 rounded transition-colors",
+                      step.toolResult.isError
+                        ? "hover:bg-red-500/20"
+                        : "hover:bg-green-500/20",
+                    )}
+                    title="View full result"
+                  >
+                    <Maximize2
+                      className={cn(
+                        "h-3 w-3",
+                        step.toolResult.isError ? "text-red-400" : "text-green-400",
+                      )}
+                    />
+                  </button>
+                </div>
+              </div>
+              <pre className="overflow-x-auto whitespace-pre-wrap font-mono max-h-32 overflow-y-auto">
                 {step.toolResult.content.map((c) => c.text).join("\n")}
               </pre>
             </div>
           )}
         </div>
+      )}
+
+      {/* Detail modal for full tool content */}
+      {detailView && (
+        <ToolDetailModal
+          open
+          onClose={() => setDetailView(null)}
+          title={detailView.title}
+          content={detailView.content}
+          isError={detailView.isError}
+        />
+      )}
+
+      {/* Graph visualization modal */}
+      {graphView && (
+        <Neo4jGraphModal
+          open
+          onClose={() => setGraphView(null)}
+          data={graphView.data}
+          title={graphView.title}
+        />
       )}
     </div>
   );
