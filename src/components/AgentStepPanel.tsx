@@ -2,6 +2,8 @@
  * Agent Step Panel — renders the ReAct agent's reasoning / tool-call / result steps.
  */
 import { useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   Brain,
   Wrench,
@@ -126,12 +128,30 @@ function StepItem({ step, defaultExpanded }: { step: AgentStep; defaultExpanded?
 
       {expanded && hasContent && (
         <div className="mt-1 ml-6 text-xs">
-          {/* Thinking / Answer / Error content */}
-          {step.content && (step.type === "thinking" || step.type === "answer" || step.type === "error") && (
+          {/* Thinking / Error: plain text */}
+          {step.content && (step.type === "thinking" || step.type === "error") && (
             <div className="rounded bg-black/20 p-2 whitespace-pre-wrap text-[hsl(var(--muted-foreground))]">
               {step.content.length > 500
                 ? step.content.slice(0, 500) + "…"
                 : step.content}
+            </div>
+          )}
+
+          {/* Answer: full markdown rendering */}
+          {step.content && step.type === "answer" && (
+            <div className="rounded bg-black/20 p-2 prose prose-sm dark:prose-invert max-w-none text-xs
+                          prose-headings:mt-2 prose-headings:mb-1 prose-headings:text-sm
+                          prose-p:my-1 prose-p:leading-relaxed
+                          prose-ul:my-1 prose-ol:my-1 prose-li:my-0
+                          prose-pre:my-1 prose-pre:bg-black/30 prose-pre:text-xs
+                          prose-code:text-xs prose-code:bg-black/20 prose-code:px-1 prose-code:rounded
+                          prose-table:my-1 prose-th:px-2 prose-th:py-1 prose-td:px-2 prose-td:py-1
+                          prose-a:text-[hsl(var(--primary))]">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {step.content.length > 2000
+                  ? step.content.slice(0, 2000) + "\n\n…(truncated)"
+                  : step.content}
+              </ReactMarkdown>
             </div>
           )}
 
