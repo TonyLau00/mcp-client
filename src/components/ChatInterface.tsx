@@ -6,8 +6,9 @@ import { useMcpStore, useChatStore, useUiStore } from "@/store";
 import { getMcpClient } from "@/lib/mcp-client";
 import { callLlm, type ChatMessage as LlmChatMessage } from "@/lib/llm-service";
 import { ChatMessage } from "./ChatMessage";
-import { ChatInput } from "./ChatInput";
+import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import { ToolCallPanel } from "./ToolCallPanel";
+import { ToolExplorer } from "./ToolExplorer";
 import { Card, CardContent, Badge } from "@/components/ui";
 import { Bot, MessageSquare } from "lucide-react";
 
@@ -29,6 +30,7 @@ export function ChatInterface() {
   const { showTransactionConfirmation } = useUiStore();
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatInputRef = useRef<ChatInputHandle>(null);
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -178,26 +180,28 @@ export function ChatInterface() {
   );
 
   return (
-    <Card className="flex h-full flex-col">
-      {/* Header */}
-      <div className="border-b border-[hsl(var(--border))] p-4">
-        <div className="flex items-center gap-2">
-          <Bot className="h-5 w-5 text-[hsl(var(--primary))]" />
-          <h2 className="font-semibold">TRON Assistant</h2>
-          {connected ? (
-            <Badge variant="success" className="ml-auto">
-              {tools.length} tools available
-            </Badge>
-          ) : (
-            <Badge variant="destructive" className="ml-auto">
-              Disconnected
-            </Badge>
-          )}
+    <div className="flex h-full gap-0">
+      {/* Main chat area */}
+      <Card className="flex h-full flex-1 flex-col overflow-hidden">
+        {/* Header */}
+        <div className="border-b border-[hsl(var(--border))] p-4">
+          <div className="flex items-center gap-2">
+            <Bot className="h-5 w-5 text-[hsl(var(--primary))]" />
+            <h2 className="font-semibold">TRON Assistant</h2>
+            {connected ? (
+              <Badge variant="success" className="ml-auto">
+                {tools.length} tools available
+              </Badge>
+            ) : (
+              <Badge variant="destructive" className="ml-auto">
+                Disconnected
+              </Badge>
+            )}
+          </div>
         </div>
-      </div>
 
-      {/* Messages */}
-      <CardContent className="flex-1 overflow-y-auto p-4">
+        {/* Messages */}
+        <CardContent className="flex-1 overflow-y-auto p-4">
         {messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center text-center text-[hsl(var(--muted-foreground))]">
             <MessageSquare className="h-12 w-12 mb-4 opacity-50" />
@@ -264,6 +268,7 @@ export function ChatInterface() {
       {/* Input */}
       <div className="border-t border-[hsl(var(--border))] p-4">
         <ChatInput
+          ref={chatInputRef}
           onSend={handleSendMessage}
           disabled={!connected}
           loading={isLoading}
@@ -274,6 +279,12 @@ export function ChatInterface() {
           }
         />
       </div>
-    </Card>
+      </Card>
+
+      {/* Tool Explorer side panel */}
+      <ToolExplorer
+        onSelectPrompt={(prompt) => chatInputRef.current?.setInput(prompt)}
+      />
+    </div>
   );
 }
