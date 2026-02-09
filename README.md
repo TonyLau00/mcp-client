@@ -1,103 +1,225 @@
-# TRON MCP Client
+# mcp-client
 
-A React-based frontend for interacting with the TRON blockchain through the MCP (Model Context Protocol) server.
-
-## Features
-
-- **AI Chat Interface**: Natural language interactions with LLM (OpenAI/Claude/DeepSeek)
-- **MCP Tool Integration**: Automatic tool discovery and invocation
-- **Transaction Graph Visualization**: Interactive force-directed graph using react-force-graph-2d
-- **Address Info Panel**: Balance, energy, bandwidth, TRC20 tokens
-- **Risk Warning System**: Visual alerts for suspicious addresses
-- **Transaction Builder**: Create unsigned transactions with confirmation dialog
-
-## Prerequisites
-
-- Node.js 20.19+ or 22.12+
-- Running `tron-mcp-server` (default: http://localhost:3100)
-- LLM API key (OpenAI, Claude, or DeepSeek)
-
-## Setup
-
-1. **Install dependencies**:
-   ```bash
-   npm install
-   ```
-
-2. **Configure environment**:
-   ```bash
-   cp .env.example .env
-   ```
-   
-   Edit `.env` and add your LLM API key:
-   ```env
-   VITE_MCP_SERVER_URL=http://localhost:3100
-   VITE_LLM_PROVIDER=openai  # or claude, deepseek
-   VITE_OPENAI_API_KEY=sk-your-api-key
-   ```
-
-3. **Start development server**:
-   ```bash
-   npm run dev
-   ```
-   
-   Open http://localhost:5173
+A React-based web interface for interacting with the TRON blockchain through a **ReAct (Reasoning + Acting) AI agent**. Connects to an MCP server via SSE, supports **7 LLM providers** with runtime switching, and includes **client-side wallet integration** for signing and broadcasting transactions.
 
 ## Architecture
 
 ```
-src/
-├── components/           # React components
-│   ├── ui/              # Reusable UI components (Button, Card, Dialog, etc.)
-│   ├── ChatInterface.tsx    # Main chat UI
-│   ├── ConnectionSettings.tsx # MCP server config
-│   ├── ToolCallPanel.tsx    # Tool execution visualization
-│   ├── TransactionGraph.tsx # Force-directed graph
-│   ├── AddressInfoPanel.tsx # Address details display
-│   └── RiskWarning.tsx      # Risk alert banner
-├── lib/
-│   ├── mcp-client.ts    # MCP SSE client
-│   ├── llm-service.ts   # LLM API integration
-│   └── utils.ts         # Utility functions
-├── store/
-│   └── index.ts         # Zustand state management
-├── config.ts            # Environment configuration
-└── App.tsx              # Root component
+┌─────────────────────────────────────────────────────────┐
+│                    mcp-client (SPA)                      │
+│                                                         │
+│  ┌─────────┐  ┌───────────┐  ┌─────────────────────┐   │
+│  │ ChatUI  │  │ ReAct     │  │ LLM Service          │   │
+│  │         │──│ Agent     │──│ (7 providers)         │──▶ LLM APIs
+│  │         │  │ Loop      │  │ OpenAI/Claude/Gemini/ │   │
+│  │         │  │           │  │ DeepSeek/Ollama/...   │   │
+│  └────┬────┘  └─────┬─────┘  └─────────────────────┘   │
+│       │             │                                    │
+│  ┌────▼────┐  ┌─────▼─────┐  ┌─────────────────────┐   │
+│  │ Wallet  │  │ MCP SSE   │  │ Graph Viz            │   │
+│  │ Connect │  │ Client    │──│ (force-graph-2d)     │   │
+│  │ TronLink│  │           │  │ Neo4j Modal          │   │
+│  └─────────┘  └─────┬─────┘  └─────────────────────┘   │
+│                      │                                   │
+└──────────────────────┼───────────────────────────────────┘
+                       │ SSE
+                       ▼
+              tron-mcp-server (:3100)
 ```
 
-## Available MCP Tools
+## Features
 
-The client auto-discovers tools from the MCP server:
+### AI Agent
+- **ReAct loop** — multi-step reasoning with tool calling
+- **7 LLM providers** — OpenAI, Claude, DeepSeek, Gemini, Ollama (local), OpenRouter, Custom (OpenAI-compatible)
+- **Runtime switching** — change LLM provider/model without reload
+- **Dynamic system prompt** — auto-injects wallet address and network context
+- **Streaming step display** — shows thinking → tool calls → observations → answer in real-time
 
-| Tool | Description |
-|------|-------------|
-| `get_account_info` | Query TRX balance, bandwidth, energy, TRC20 tokens |
-| `get_transaction_status` | Check transaction confirmation status |
-| `get_network_parameters` | Get energy/bandwidth prices, block info |
-| `check_address_security` | Analyze address risk with tags |
-| `build_unsigned_transfer` | Create unsigned TRX/TRC20 transfer |
-| `analyze_address_graph` | Get transaction network graph |
-| `get_address_risk_score` | Compute risk score from graph analysis |
-| `get_address_flow_analysis` | Analyze fund flow patterns |
+### Blockchain Tools (via MCP)
+- Account balance & resource queries
+- Transaction status & decoded input data
+- Address graph analysis & risk scoring
+- Contract ABI, verification, source code
+- Fund flow analysis
+- Build unsigned TRX/TRC20 transfers (network-aware)
 
-## Scripts
+### Wallet Integration
+- **TronLink** browser extension support
+- **Private key** mode (for testing)
+- **Network selector** — Mainnet / Nile / Shasta / Custom RPC
+- **Client-side signing** — transactions are signed locally, never on the server
+- **Transaction cards** — inline sign & broadcast UI in chat
+
+### UI
+- **Markdown rendering** with code highlighting
+- **Neo4j graph modal** — interactive force-directed graph visualization
+- **Tool explorer** side panel — browse all available MCP tools
+- **Agent step panel** — expandable reasoning trace
+- **Dark theme** with Tailwind CSS 4
+
+## Prerequisites
+
+- **Node.js** ≥ 20
+- **tron-mcp-server** running on port 3100 (SSE mode)
+- At least one **LLM API key** (DeepSeek, OpenAI, Claude, etc.) or local **Ollama**
+
+## Quick Start
+
+### 1. Install dependencies
 
 ```bash
-npm run dev       # Start dev server
-npm run build     # Production build
-npm run preview   # Preview production build
-npm run lint      # Run ESLint
+npm install
 ```
 
-## Tech Stack
+### 2. Configure environment
 
-- **React 19** + TypeScript
-- **Vite 7** - Build tool
-- **Tailwind CSS 4** - Styling
-- **Zustand** - State management
-- **react-force-graph-2d** - Graph visualization
-- **@modelcontextprotocol/sdk** - MCP client
-- **Lucide React** - Icons
+```bash
+cp .env.example .env
+```
+
+Edit `.env`:
+```dotenv
+# MCP Server
+VITE_MCP_SERVER_URL=http://localhost:3100
+
+# Default LLM provider
+VITE_LLM_PROVIDER=deepseek
+
+# DeepSeek (recommended — cheapest with good tool calling)
+VITE_DEEPSEEK_API_KEY=your-key
+VITE_DEEPSEEK_BASE_URL=https://api.deepseek.com
+VITE_DEEPSEEK_MODEL=deepseek-chat
+
+# OpenAI
+VITE_OPENAI_API_KEY=your-key
+VITE_OPENAI_MODEL=gpt-4o
+
+# Claude
+VITE_CLAUDE_API_KEY=your-key
+VITE_CLAUDE_MODEL=claude-sonnet-4-20250514
+
+# Gemini
+VITE_GEMINI_API_KEY=your-key
+VITE_GEMINI_MODEL=gemini-2.0-flash
+
+# Ollama (local)
+VITE_OLLAMA_BASE_URL=http://localhost:11434
+VITE_OLLAMA_MODEL=qwen2.5:14b
+
+# OpenRouter
+VITE_OPENROUTER_API_KEY=your-key
+VITE_OPENROUTER_MODEL=anthropic/claude-sonnet-4
+
+# Custom (OpenAI-compatible)
+VITE_CUSTOM_BASE_URL=http://localhost:8000/v1
+VITE_CUSTOM_MODEL=default
+```
+
+### 3. Run
+
+```bash
+# Development
+npm run dev
+# → http://localhost:5173
+
+# Production build
+npm run build
+# → dist/ (static files, serve with nginx)
+```
+
+## Production Deployment
+
+Build static files and serve with Nginx:
+
+```bash
+npm run build
+```
+
+Nginx configuration:
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;
+
+    root /path/to/mcp-client/dist;
+    index index.html;
+
+    # SPA fallback
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Proxy MCP SSE server
+    location /mcp/ {
+        proxy_pass http://127.0.0.1:3100/;
+        proxy_http_version 1.1;
+        proxy_set_header Connection '';
+        proxy_buffering off;              # Required for SSE
+        proxy_cache off;
+        proxy_read_timeout 86400s;
+    }
+}
+```
+
+## Project Structure
+
+```
+mcp-client/
+├── package.json
+├── vite.config.ts
+├── tsconfig.json
+├── .env.example
+├── index.html
+└── src/
+    ├── main.tsx                    # React entry point
+    ├── App.tsx                     # Root component — auto-connects MCP
+    ├── config.ts                   # LLM provider configuration (7 providers)
+    ├── index.css                   # Tailwind CSS imports
+    ├── components/
+    │   ├── ChatInterface.tsx       # Main chat UI + agent orchestration
+    │   ├── ChatInput.tsx           # Message input with send button
+    │   ├── ChatMessage.tsx         # Message bubble with markdown rendering
+    │   ├── AgentStepPanel.tsx      # ReAct step trace display
+    │   ├── ToolCallPanel.tsx       # Tool invocation details
+    │   ├── ToolExplorer.tsx        # Side panel — browse MCP tools
+    │   ├── ConnectionSettings.tsx  # MCP server connection config
+    │   ├── LlmSettings.tsx         # LLM provider/model selector
+    │   ├── WalletConnect.tsx       # Wallet connection + network selector
+    │   ├── TransactionCard.tsx     # Inline sign & broadcast card
+    │   ├── TransactionConfirmDialog.tsx
+    │   ├── TransactionGraph.tsx    # Force-directed graph visualization
+    │   ├── Neo4jGraphModal.tsx     # Full-screen graph modal
+    │   ├── AddressInfoPanel.tsx    # Address details panel
+    │   ├── RiskWarning.tsx         # Risk score warning display
+    │   └── ui/                     # Shared UI primitives
+    │       ├── Badge.tsx
+    │       ├── Button.tsx
+    │       ├── Card.tsx
+    │       ├── Dialog.tsx
+    │       └── Input.tsx
+    ├── lib/
+    │   ├── agent.ts               # ReAct agent loop
+    │   ├── llm-service.ts         # Multi-provider LLM service
+    │   ├── mcp-client.ts          # MCP SSE client wrapper
+    │   ├── tron-wallet.ts         # TronLink / private key wallet
+    │   └── utils.ts               # Helpers (truncateAddress, cn, etc.)
+    └── store/
+        └── index.ts               # Zustand stores (MCP, Chat, Agent, LLM, Wallet, UI)
+```
+
+## State Management
+
+Six Zustand stores:
+
+| Store | Purpose |
+|-------|---------|
+| `useMcpStore` | MCP connection state, available tools |
+| `useChatStore` | Chat messages, pending tool calls |
+| `useAgentStore` | Agent steps, running state |
+| `useLlmStore` | Active provider, model, all provider configs |
+| `useWalletStore` | Wallet mode, address, network, pending transactions |
+| `useUiStore` | Theme, panel visibility |
 
 ## Usage Examples
 
@@ -108,67 +230,30 @@ npm run lint      # Run ESLint
    > "Is address TDqSquXBgUCLYvYC4XZgrprLK589dkhSCf safe to interact with?"
 
 3. **Build a transfer**:
-   > "Build a transaction to send 100 TRX from TAddr1... to TAddr2..."
+   > "Send 100 TRX to TAddr..."  _(auto-uses connected wallet as sender)_
 
 4. **Explore transaction graph**:
    > "Show me the transaction network around address TXyz... with 2 hops"
 
-## Security Notes
+5. **Inspect a contract**:
+   > "What does the contract TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf do?"
 
-- **Never share private keys** - This app only builds unsigned transactions
-- **Review transactions** - Always verify transaction details before signing
-- **Risk warnings** - Pay attention to flagged addresses
-- **Local signing** - Sign transactions using TronLink or TronWeb locally
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## Tech Stack
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+| Component | Technology |
+|-----------|-----------|
+| Framework | React 19 |
+| Build Tool | Vite 7 |
+| Language | TypeScript ~5.9 |
+| Styling | Tailwind CSS 4 |
+| State | Zustand 5 |
+| Graphs | react-force-graph-2d |
+| Markdown | react-markdown + remark-gfm |
+| Icons | Lucide React |
+| Blockchain | TronWeb ^6.2.0 |
+| MCP | @modelcontextprotocol/sdk ^1.26.0 |
+| Data Fetching | @tanstack/react-query 5 |
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+## License
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+MIT
