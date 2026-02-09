@@ -254,13 +254,36 @@ export function TransactionCard({ transaction: tx }: Props) {
             </>
           )}
 
-          {tx.status === "success" && explorerUrl && (
-            <a href={explorerUrl} target="_blank" rel="noopener noreferrer">
-              <Button variant="outline" size="sm" className="gap-1.5">
-                <ExternalLink className="h-3.5 w-3.5" />
-                View on TronScan
+          {tx.status === "success" && (
+            <>
+              {explorerUrl && (
+                <a href={explorerUrl} target="_blank" rel="noopener noreferrer">
+                  <Button variant="outline" size="sm" className="gap-1.5">
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    View on TronScan
+                  </Button>
+                </a>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="ml-auto text-[hsl(var(--muted-foreground))]"
+                onClick={() => removePendingTx(tx.id)}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
               </Button>
-            </a>
+            </>
+          )}
+
+          {(tx.status === "signing" || tx.status === "broadcasting") && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="ml-auto text-[hsl(var(--muted-foreground))]"
+              onClick={() => removePendingTx(tx.id)}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
           )}
         </div>
       </div>
