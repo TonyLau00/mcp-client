@@ -66,25 +66,6 @@ function makeStepId(): string {
   return `step_${Date.now()}_${++stepCounter}`;
 }
 
-/**
- * Format tool results into a message the LLM can understand.
- * Uses structured format so the LLM can correlate results with specific tool calls.
- */
-function formatToolResults(
-  _toolCalls: ToolCall[],
-  results: { name: string; result: McpCallResult; error?: string }[],
-): string {
-  return results
-    .map((r) => {
-      if (r.error) {
-        return `[Tool "${r.name}" ERROR]\n${r.error}`;
-      }
-      const text = r.result.content.map((c) => c.text).join("\n");
-      return `[Tool "${r.name}" result]\n${text}`;
-    })
-    .join("\n\n");
-}
-
 // ─── Agent Core ─────────────────────────────────────────────────
 
 /**

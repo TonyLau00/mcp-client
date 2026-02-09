@@ -2,7 +2,7 @@
  * Main chat interface component — powered by the ReAct Agent loop.
  */
 import { useCallback, useRef, useEffect } from "react";
-import { useMcpStore, useChatStore, useUiStore, useAgentStore, useLlmStore, useWalletStore } from "@/store";
+import { useMcpStore, useChatStore, useAgentStore, useLlmStore, useWalletStore } from "@/store";
 import { getMcpClient } from "@/lib/mcp-client";
 import { buildTransferTx } from "@/lib/tron-wallet";
 import { runAgent } from "@/lib/agent";
