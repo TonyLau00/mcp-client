@@ -78,7 +78,7 @@ function App() {
             </Button>
 
             <a
-              href="https://github.com"
+              href="https://github.com/TonyLau00/gwdc-overview"
               target="_blank"
               rel="noopener noreferrer"
               title="GitHub"
